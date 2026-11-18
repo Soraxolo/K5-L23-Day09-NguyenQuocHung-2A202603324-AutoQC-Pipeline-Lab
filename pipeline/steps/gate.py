@@ -16,9 +16,39 @@ Tỉ lệ cảnh báo = (số ẢNH khác nhau có ≥ 1 cảnh báo) / (tổng 
 
 Trả về dict: decision, n_errors, n_warn_images, n_images, warn_ratio (làm tròn 4 chữ số), reasons (list[str], giải thích bằng tiếng Việt, có số liệu).
 """
-from ..common import ERROR, WARN  # noqa: F401
+from ..common import ERROR, WARN
 
 
 def decide(issues, image_stems, cfg, reviewed=frozenset()):
-    # TODO
-    raise NotImplementedError("gate chưa làm")
+    stems = set(image_stems)
+    reviewed = set(reviewed)
+    thr = cfg["gate"]["warn_ratio_hold"]
+
+    # Lỗi bắt buộc: đếm HẾT, kể cả ở ảnh người đã duyệt và lỗi cấp dataset (data.yaml) — không ai được bỏ qua.
+    errors = [i for i in issues if i.severity == ERROR]
+    # Cảnh báo: chỉ tính theo ẢNH còn trong lô và CHƯA có người xem.
+    warn_images = {i.image for i in issues
+                   if i.severity == WARN and i.image in stems and i.image not in reviewed}
+
+    n_images = len(stems)
+    warn_ratio = round(len(warn_images) / n_images, 4) if n_images else 0.0
+
+    reasons = []
+    if errors:
+        decision = "Rework"
+        top = sorted({i.code for i in errors})[:4]
+        reasons.append(f"còn {len(errors)} lỗi bắt buộc trên {len({i.image for i in errors})} mục "
+                       f"({', '.join(top)}{'...' if len({i.code for i in errors}) > 4 else ''}): trả về bước gán nhãn, KHÔNG xuất dữ liệu")
+    elif warn_ratio >= thr:
+        decision = "Hold"
+        reasons.append(f"hết lỗi bắt buộc, nhưng {len(warn_images)}/{n_images} ảnh ({warn_ratio:.1%}) "
+                       f"còn cảnh báo chưa ai duyệt ≥ ngưỡng {thr:.0%}: giữ lại, cần thêm ngân sách duyệt")
+    else:
+        decision = "Release"
+        reasons.append(f"không còn lỗi bắt buộc; {len(warn_images)}/{n_images} ảnh ({warn_ratio:.1%}) "
+                       f"còn cảnh báo chưa duyệt < ngưỡng {thr:.0%}")
+    if reviewed:
+        reasons.append(f"{len(reviewed)} ảnh đã qua mắt người duyệt")
+
+    return dict(decision=decision, n_errors=len(errors), n_warn_images=len(warn_images),
+                n_images=n_images, warn_ratio=warn_ratio, reasons=reasons)
